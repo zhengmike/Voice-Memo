@@ -1,0 +1,9 @@
+{
+  "name": "Voice Memo",
+  "description": "Minimalist voice memo app optimized for physical buttons, with AI-powered transcription, merging, and Google Workspace integration.",
+  "requestFramePermissions": [
+    "microphone",
+    "geolocation"
+  ],
+  "majorCapabilities": []
+}
