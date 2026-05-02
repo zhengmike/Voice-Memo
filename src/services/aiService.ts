@@ -25,37 +25,23 @@ const callWithRetry = async (fn: () => Promise<any>) => {
   throw lastError;
 };
 
-export const processAudioWithGemini = async (base64Audio: string, mimeType: string, previousSummary?: string, location?: {lat: number, lng: number}, language: string = 'zh') => {
-  let locationText = 'Unknown';
-  if (location) {
-    try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 3000);
-      const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${location.lat}&lon=${location.lng}`, {
-        signal: controller.signal
-      });
-      clearTimeout(timeoutId);
-      const data = await res.json();
-      locationText = data.display_name || `${location.lat}, ${location.lng}`;
-    } catch {
-      locationText = `${location.lat}, ${location.lng}`;
-    }
-  }
-
+export const processAudioWithGemini = async (base64Audio: string, mimeType: string, previousSummary?: string, language: string = 'zh') => {
   const systemLanguage = language === 'zh' ? 'Simplified Chinese' : 'English';
 
   const prompt = `You are an AI assistant processing voice memos. 
 I am sending you the audio recording.
-User's recorded location: ${locationText}.
 ${previousSummary ? 'Previous Memo Summary: ' + previousSummary : 'There is no previous memo.'}
 
-Based on the audio content, the recorded location, and the previous memo (if any), please:
+Based on the audio content and the previous memo (if any), please:
 1. Provide a short, descriptive title for this memo. If the audio is empty or has no spoken words, make up a generic title (e.g. "Silence").
 2. Provide a full transcription.
 3. Provide a concise summary.
 4. Decide whether this audio content is strongly related to the previous memo and should be "merged" with it, or if it is a conceptually new topic and should be "split" into a new file.
+5. Detect if the audio is silent or contains no meaningful human speech. If so, set 'isSilent' to true.
+6. Determine the type of the audio (e.g., Meeting, Personal Memo, Interview, Lecture, To-Do List, Journal).
+7. Design a rich text HTML document (docHtml) using semantic tags (<h1>, <h2>, <p>, <ul>, <li>, <strong>, etc.) appropriate for this audio type. The HTML should be a document fragment (no <html>, <head>, or <body> tags, just the content). Format it nicely based on the recognized type (e.g., if it's a "Meeting", include headers like "Participants", "Agenda", "Action Items"). Include the title, summary, and transcript inside this HTML in an organized way.
 
-CRITICAL REQUIREMENT: Your title, transcription, and summary MUST be entirely in ${systemLanguage}.
+CRITICAL REQUIREMENT: Your title, transcription, summary, and HTML document MUST be entirely in ${systemLanguage}.
 
 Return the result as JSON using the specified schema.
 `;
@@ -86,12 +72,20 @@ Return the result as JSON using the specified schema.
               type: Type.STRING,
               description: "A concise summary of the content",
             },
+            docHtml: {
+              type: Type.STRING,
+              description: "The rich text HTML document tailored to the audio type. Include formatting, headers, paragraphs, and lists as appropriate.",
+            },
             action: {
               type: Type.STRING,
-              description: "Must be exactly 'merge' or 'split'. Choose merge if the topic or location strongly continues the previous memo. Choose split if there is no previous memo or the topic is entirely new.",
+              description: "Must be exactly 'merge' or 'split'. Choose merge if the topic strongly continues the previous memo. Choose split if there is no previous memo or the topic is entirely new.",
+            },
+            isSilent: {
+              type: Type.BOOLEAN,
+              description: "Set to true if there is no speech or only background noise.",
             }
           },
-          required: ["title", "transcript", "summary", "action"]
+          required: ["title", "transcript", "summary", "docHtml", "action", "isSilent"]
         }
       }
     }));
@@ -102,7 +96,9 @@ Return the result as JSON using the specified schema.
       title: result.title || "Untitled Memo",
       transcript: result.transcript,
       summary: result.summary,
-      action: result.action === 'merge' ? 'merge' : 'split'
+      docHtml: result.docHtml,
+      action: result.action === 'merge' ? 'merge' : 'split',
+      isSilent: result.isSilent === true
     };
   } catch (err) {
     console.error("Gemini AI Processing Error:", err);
@@ -120,7 +116,7 @@ Below are the contents of the individual documents that the user selected to be 
 
 CRITICAL REQUIREMENT: Your title, original transcription section, and reorganized synthesis MUST be entirely in ${systemLanguage}.
 
-Return the result as JSON using the specified schema.
+Return the result as JSON using the specified schema. Please format the mergedContent as a rich HTML document (using <h1>, <h2>, <p>, <ul>, <li>, <strong>, etc.) so it looks great in Google Docs. Make it a complete HTML fragment (no <html>, <head>, or <body> tags, just the content).
 
 Documents to merge:
 ${docsContent.map((doc, i) => `--- Document ${i + 1} ---\n${doc}\n`).join('\n')}
@@ -141,7 +137,7 @@ ${docsContent.map((doc, i) => `--- Document ${i + 1} ---\n${doc}\n`).join('\n')}
             },
             mergedContent: {
               type: Type.STRING,
-              description: "The full document. MUST include two sections: 1. 'Original Transcriptions' (all raw contents clearly separated) and 2. 'Summary & Synthesis' (the organized reorganized version).",
+              description: "The full HTML document. MUST include two sections: 1. 'Original Transcriptions' (all raw contents clearly separated) and 2. 'Summary & Synthesis' (the organized reorganized version). Use semantic HTML.",
             },
             summary: {
               type: Type.STRING,

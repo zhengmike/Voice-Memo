@@ -2,7 +2,7 @@ export type Language = 'en' | 'zh';
 
 export const translations = {
   en: {
-    title: "Voice Memo",
+    title: "拾音",
     signInDesc: "Sign in with Google to save your recordings to Drive and Docs.",
     signInBtn: "Sign in with Google",
     appState: "App State",
@@ -40,10 +40,11 @@ export const translations = {
     mergingDocs: "Merging documents...",
     selectDocsToMerge: "Select at least 2 documents to merge",
     rename: "Rename",
-    fileName: "File Name"
+    fileName: "File Name",
+    logout: "Sign Out"
   },
   zh: {
-    title: "Voice Memo",
+    title: "拾音",
     signInDesc: "使用 Google 账号登录，将录音保存到 Drive 和 Docs。",
     signInBtn: "使用 Google 登录",
     appState: "应用状态",
@@ -81,6 +82,7 @@ export const translations = {
     mergingDocs: "正在合并文档...",
     selectDocsToMerge: "请至少选择 2 个文档进行合并",
     rename: "重命名",
-    fileName: "文件名"
+    fileName: "文件名",
+    logout: "退出登录"
   }
 };

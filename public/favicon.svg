@@ -1,0 +1,14 @@
+<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+  <!-- Mic Head -->
+  <rect x="36.5" y="22" width="27" height="42" rx="13.5" fill="#111111"/>
+  <!-- Mic Cradle -->
+  <path d="M 28.5 45 V 53 A 21.5 21.5 0 0 0 71.5 53 V 45" fill="none" stroke="#111111" stroke-width="7" stroke-linecap="round" stroke-linejoin="round" />
+  <!-- Stand Stem -->
+  <line x1="50" y1="74" x2="50" y2="86" stroke="#111111" stroke-width="7" />
+  <!-- Stand Base -->
+  <line x1="39" y1="83" x2="61" y2="83" stroke="#111111" stroke-width="7" stroke-linecap="round" />
+  <!-- Large Sparkle -->
+  <path d="M 64 30 Q 73 30 73 21 Q 73 30 82 30 Q 73 30 73 39 Q 73 30 64 30 Z" fill="#111111"/>
+  <!-- Small Sparkle -->
+  <path d="M 78 17 Q 82 17 82 13 Q 82 17 86 17 Q 82 17 82 21 Q 82 17 78 17 Z" fill="#111111"/>
+</svg>

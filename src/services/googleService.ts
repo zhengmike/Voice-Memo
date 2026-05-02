@@ -9,7 +9,16 @@ const SCOPES = [
   'https://www.googleapis.com/auth/gmail.send'
 ].join(' ');
 
-let currentToken = '';
+const TOKEN_KEY = 'voice_memo_token_v1';
+const EXPIRY_KEY = 'voice_memo_expiry_v1';
+
+let currentToken = localStorage.getItem(TOKEN_KEY) || '';
+
+const isTokenValid = () => {
+  const expiry = localStorage.getItem(EXPIRY_KEY);
+  if (!currentToken || !expiry) return false;
+  return Date.now() < parseInt(expiry);
+};
 
 declare const google: any;
 
@@ -20,13 +29,23 @@ export const initOAuth = (): Promise<string> => {
         reject(new Error("VITE_GOOGLE_CLIENT_ID 环境变量未设置。"));
         return;
       }
+
+      // Check if we already have a valid token
+      if (isTokenValid()) {
+        resolve(currentToken);
+        return;
+      }
       
       const client = google.accounts.oauth2.initTokenClient({
         client_id: CLIENT_ID,
         scope: SCOPES,
+        prompt: 'select_account',
         callback: (response: any) => {
           if (response.access_token) {
             currentToken = response.access_token;
+            const expiresIn = response.expires_in || 3600;
+            localStorage.setItem(TOKEN_KEY, currentToken);
+            localStorage.setItem(EXPIRY_KEY, (Date.now() + expiresIn * 1000).toString());
             resolve(response.access_token);
           } else {
             reject(new Error('Failed to get access token: ' + (response.error || 'Unknown error')));
@@ -40,7 +59,46 @@ export const initOAuth = (): Promise<string> => {
   });
 };
 
-export const getToken = () => currentToken;
+export const checkExistingAuth = (): boolean => {
+  return isTokenValid();
+};
+
+export interface GoogleUserInfo {
+  id: string;
+  email: string;
+  verified_email: boolean;
+  name: string;
+  given_name: string;
+  family_name: string;
+  picture: string;
+}
+
+export const getUserInfo = async (): Promise<GoogleUserInfo> => {
+  if (!isTokenValid()) throw new Error("Not authenticated");
+  
+  const res = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
+    headers: {
+      Authorization: `Bearer ${currentToken}`
+    }
+  });
+
+  if (!res.ok) {
+    throw new Error('Failed to fetch user info');
+  }
+
+  return await res.json();
+};
+
+export const logout = () => {
+  currentToken = '';
+  localStorage.removeItem(TOKEN_KEY);
+  localStorage.removeItem(EXPIRY_KEY);
+};
+
+export const getToken = () => {
+  if (isTokenValid()) return currentToken;
+  return '';
+};
 
 export interface DriveFile {
   id: string;
@@ -48,6 +106,8 @@ export interface DriveFile {
   mimeType: string;
   createdTime?: string;
   webViewLink?: string;
+  description?: string;
+  videoMediaMetadata?: { durationMillis: string };
 }
 
 export const getTodaysFiles = async (folderName: string): Promise<DriveFile[]> => {
@@ -68,7 +128,7 @@ export const getTodaysFiles = async (folderName: string): Promise<DriveFile[]> =
 
   // Query all files in the folder, ordered by date descending
   const filesQuery = encodeURIComponent(`'${folderId}' in parents and trashed=false`);
-  const filesRes = await fetch(`https://www.googleapis.com/drive/v3/files?q=${filesQuery}&fields=files(id,name,mimeType,createdTime,webViewLink)&orderBy=createdTime desc&pageSize=50`, {
+  const filesRes = await fetch(`https://www.googleapis.com/drive/v3/files?q=${filesQuery}&fields=files(id,name,mimeType,createdTime,webViewLink,description,videoMediaMetadata)&orderBy=createdTime desc&pageSize=50`, {
     headers: { Authorization: `Bearer ${token}` }
   });
   
@@ -109,7 +169,7 @@ export const getOrCreateFolder = async (folderName: string): Promise<string> => 
   return createData.id;
 };
 
-export const uploadToDrive = async (base64Audio: string, mimeType: string, filename: string, folderId?: string): Promise<DriveFile> => {
+export const uploadToDrive = async (base64Audio: string, mimeType: string, filename: string, folderId?: string, description?: string): Promise<DriveFile> => {
   const token = getToken();
   if (!token) throw new Error("Not authenticated");
 
@@ -130,11 +190,15 @@ export const uploadToDrive = async (base64Audio: string, mimeType: string, filen
     metadata.parents = [folderId];
   }
 
+  if (description) {
+    metadata.description = description;
+  }
+
   const form = new FormData();
   form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
   form.append('file', file);
 
-  const res = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,mimeType,createdTime,webViewLink', {
+  const res = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,mimeType,createdTime,webViewLink,description,videoMediaMetadata', {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${token}`
@@ -151,7 +215,6 @@ export const createGoogleDoc = async (title: string, content: string, folderId?:
   const token = getToken();
   if (!token) throw new Error("Not authenticated");
 
-  // 1. Create empty doc via Drive API to support parents
   const metadata: any = {
     name: title,
     mimeType: 'application/vnd.google-apps.document'
@@ -160,43 +223,26 @@ export const createGoogleDoc = async (title: string, content: string, folderId?:
     metadata.parents = [folderId];
   }
 
-  const createRes = await fetch('https://www.googleapis.com/drive/v3/files?fields=id,name,mimeType,createdTime,webViewLink', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify(metadata)
-  });
-  const createData = await createRes.json();
-  if (!createRes.ok) throw new Error(createData.error?.message || 'Failed to create doc');
-  const docId = createData.id;
-
-  // 2. Insert content via Docs API
-  const updateRes = await fetch(`https://docs.googleapis.com/v1/documents/${docId}:batchUpdate`, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({
-      requests: [
-        {
-          insertText: {
-            location: { index: 1 },
-            text: content
-          }
-        }
-      ]
-    })
-  });
+  const isHtml = content.trim().startsWith('<');
   
-  if (!updateRes.ok) {
-    const errData = await updateRes.json();
-    throw new Error(errData.error?.message || 'Failed to update doc');
+  const form = new FormData();
+  form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
+  form.append('file', new Blob([content], { type: isHtml ? 'text/html' : 'text/plain' }));
+
+  const res = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,mimeType,createdTime,webViewLink', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`
+    },
+    body: form
+  });
+
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.error?.message || 'Failed to create doc');
   }
 
-  return createData as DriveFile;
+  return data as DriveFile;
 };
 
 export const appendToGoogleDoc = async (docId: string, content: string): Promise<void> => {
@@ -271,6 +317,43 @@ export const sendEmail = async (toEmail: string, subject: string, bodyText: stri
   }
 };
 
+export const exportDocAsHtml = async (fileId: string): Promise<string> => {
+  const token = getToken();
+  if (!token) throw new Error("Not authenticated");
+
+  const res = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}/export?mimeType=text/html`, {
+    headers: { Authorization: `Bearer ${token}` }
+  });
+
+  if (!res.ok) {
+    const errData = await res.json().catch(() => null);
+    throw new Error(errData?.error?.message || 'Failed to export document as HTML');
+  }
+
+  return await res.text();
+};
+
+export const updateGoogleDocContent = async (fileId: string, htmlContent: string): Promise<void> => {
+  const token = getToken();
+  if (!token) throw new Error("Not authenticated");
+
+  const form = new FormData();
+  form.append('file', new Blob([htmlContent], { type: 'text/html' }));
+
+  const res = await fetch(`https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=multipart`, {
+    method: 'PATCH',
+    headers: {
+      Authorization: `Bearer ${token}`
+    },
+    body: form
+  });
+
+  if (!res.ok) {
+    const data = await res.json();
+    throw new Error(data.error?.message || 'Failed to update doc');
+  }
+};
+
 export const exportDocAsText = async (fileId: string): Promise<string> => {
   const token = getToken();
   if (!token) throw new Error("Not authenticated");
@@ -307,7 +390,7 @@ export const searchAudioFiles = async (): Promise<DriveFile[]> => {
   if (!token) throw new Error("Not authenticated");
 
   const query = encodeURIComponent(`mimeType contains 'audio/' and trashed=false`);
-  const res = await fetch(`https://www.googleapis.com/drive/v3/files?q=${query}&fields=files(id,name,mimeType,createdTime,webViewLink)&orderBy=modifiedTime desc&pageSize=20`, {
+  const res = await fetch(`https://www.googleapis.com/drive/v3/files?q=${query}&fields=files(id,name,mimeType,createdTime,webViewLink,description,videoMediaMetadata)&orderBy=modifiedTime desc&pageSize=20`, {
     headers: { Authorization: `Bearer ${token}` }
   });
 
@@ -328,7 +411,7 @@ export const downloadFileAsBlob = async (fileId: string): Promise<Blob> => {
   return await res.blob();
 };
 
-export const renameFile = async (fileId: string, newName: string): Promise<void> => {
+export const updateFileMetadata = async (fileId: string, metadata: { name?: string, description?: string }): Promise<void> => {
   const token = getToken();
   if (!token) throw new Error("Not authenticated");
 
@@ -338,13 +421,11 @@ export const renameFile = async (fileId: string, newName: string): Promise<void>
       Authorization: `Bearer ${token}`,
       'Content-Type': 'application/json'
     },
-    body: JSON.stringify({
-      name: newName
-    })
+    body: JSON.stringify(metadata)
   });
 
   if (!res.ok) {
     const data = await res.json();
-    throw new Error(data.error?.message || 'Failed to rename file');
+    throw new Error(`Failed to update file metadata: ${data.error?.message || 'Unknown error'}`);
   }
 };
